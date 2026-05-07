@@ -1,5 +1,4 @@
 {
     "BOT_TOKEN": "TELEGRAM_BOT_TOKEN",
-    "STORAGE": "./account.json",
-    "TEMP": "./emoji/"
+    "STORAGE": "./account.json"
 }
