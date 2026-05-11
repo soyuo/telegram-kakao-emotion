@@ -120,20 +120,20 @@ bot.onText(/^.*$/, async (event) => {
         const isDecrypted = ['webp', 'mp4'].some(ext => previewData.playPathFormat.endsWith(ext)); // playPathFormat - dw/2222413.emot_0##.png
         if (false) {
 
-        await bot.sendMessage(chatId, `${MetaData.title} - ${MetaData.name} [${MetaData.duration}]\n${previewData.num}개 (복호화 ${isDecrypted ? '' : '불'}필요)`);
+            await bot.sendMessage(chatId, `${MetaData.title} - ${MetaData.name} [${MetaData.duration}]\n${previewData.num}개 (복호화 ${isDecrypted ? '' : '불'}필요)`);
 
         }
 
         const stickerPackLink = buildKakaoEmoticonLink(MetaData);
-        const stickerPackTitle = buildLinkedTitle(MetaData.title, stickerPackLink);
+
         await bot.sendMessage(
             chatId,
-            `${stickerPackTitle} - ${escapeHtml(MetaData.name)} [${escapeHtml(MetaData.duration)}]\n${previewData.num}개 (복호화 ${isDecrypted ? '' : '불'}필요)`,
+            `${buildLinkedTitle(MetaData.title, stickerPackLink)} - ${escapeHtml(MetaData.name)} [${escapeHtml(MetaData.duration)}]\n${previewData.num}개 (복호화 ${isDecrypted ? '' : '불'}필요)`,
             { parse_mode: 'HTML' }
         );
         const playUrls = buildPreviewUrls(previewData.playPathFormat, previewData.num);
 
-        await bot.sendMessage(chatId, '이미지 위치 파악 완료!\n데이터를 가지고 오고 있습니다..\n( 평균 소요 시간: 1~3분 )');
+        await bot.sendMessage(chatId, '이미지 위치 파악 완료!\n데이터를 가지고 오고 있습니다..\n( 평균 소요 시간: 1분 )');
 
         let buffers;
 
@@ -148,18 +148,13 @@ bot.onText(/^.*$/, async (event) => {
             return bot.sendMessage(chatId, '스티커로 만들 이모티콘 데이터를 찾지 못했어요.');
         }
 
-        await bot.sendMessage(chatId, `데이터를 불러왔어요 (${buffers.length}/${previewData.num})\n스티커팩을 생성중이에요..\n( 평균 소요 시간: 1~2분 )`);
+        await bot.sendMessage(chatId, `데이터를 불러왔어요 (${buffers.length}/${previewData.num})\n스티커팩을 생성중이에요..\n( 평균 소요 시간: 2~3분 )`);
 
         const stickerSetLink = await createStickerPackFromBuffers(userId, MetaData, buffers);
         return bot.sendMessage(
             chatId,
-            `${stickerPackTitle} - ${escapeHtml(MetaData.name)} ?대え?곗퐯 ?앹꽦 ?꾨즺!\n${escapeHtml(stickerSetLink)}`,
+            `${buildLinkedTitle(`${MetaData.title} - ${MetaData.name}`, escapeHtml(stickerSetLink))}\n이모티콘 생성 완료!`,
             { parse_mode: 'HTML' }
-        );
-
-        return bot.sendMessage(
-            chatId,
-            `${MetaData.title} - ${MetaData.name} 이모티콘 생성 완료!\n${stickerSetLink}`
         );
     }
 
