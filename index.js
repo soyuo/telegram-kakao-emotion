@@ -1,9 +1,12 @@
 const config = require('./config.json');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 const telegram_bot = require('node-telegram-bot-api');
 const crypto = require('crypto');
 const sharp = require('sharp');
+
+const EMOTIONS_DIR = path.join(__dirname, 'emotions');
 
 const bot = new telegram_bot(config.BOT_TOKEN, { polling: true });
 
@@ -13,6 +16,10 @@ if (!fs.existsSync(config.STORAGE)) {
         fs.mkdirSync(sourceDir);
     }
     fs.writeFileSync(config.STORAGE, '{}', 'utf-8');
+}
+
+if (!fs.existsSync(EMOTIONS_DIR)) {
+    fs.mkdirSync(EMOTIONS_DIR, { recursive: true });
 }
 
 const accounts = JSON.parse(
@@ -117,10 +124,10 @@ bot.onText(/^.*$/, async (event) => {
             return bot.sendMessage(chatId, 'mp4 형식 이모티콘은 아직 스티커팩 생성이 지원되지 않아요.');
         }
 
-        const isDecrypted = ['webp', 'mp4'].some(ext => previewData.playPathFormat.endsWith(ext)); // playPathFormat - dw/2222413.emot_0##.png
+        const needsDecrypt = ['webp', 'mp4'].some(ext => previewData.playPathFormat.endsWith(ext)); // playPathFormat - dw/2222413.emot_0##.png
         if (false) {
 
-            await bot.sendMessage(chatId, `${MetaData.title} - ${MetaData.name} [${MetaData.duration}]\n${previewData.num}개 (복호화 ${isDecrypted ? '' : '불'}필요)`);
+            await bot.sendMessage(chatId, `${MetaData.title} - ${MetaData.name} [${MetaData.duration}]\n${previewData.num}개 (복호화 ${needsDecrypt ? '' : '불'}필요)`);
 
         }
 
@@ -128,7 +135,7 @@ bot.onText(/^.*$/, async (event) => {
 
         await bot.sendMessage(
             chatId,
-            `${buildLinkedTitle(MetaData.title, stickerPackLink)} - ${escapeHtml(MetaData.name)} [${escapeHtml(MetaData.duration)}]\n${previewData.num}개 (복호화 ${isDecrypted ? '' : '불'}필요)`,
+            `${buildLinkedTitle(MetaData.title, stickerPackLink)} - ${escapeHtml(MetaData.name)} [${escapeHtml(MetaData.duration)}]\n${previewData.num}개 (복호화 ${needsDecrypt ? '' : '불'}필요)`,
             { parse_mode: 'HTML' }
         );
         const playUrls = buildPreviewUrls(previewData.playPathFormat, previewData.num);
@@ -138,7 +145,7 @@ bot.onText(/^.*$/, async (event) => {
         let buffers;
 
         try {
-            buffers = await downloadStickerBuffers(playUrls, isDecrypted);
+            buffers = await getStickerBuffers(MetaData, previewData, playUrls, needsDecrypt);
         } catch (err) {
             console.error(err);
             return bot.sendMessage(chatId, '이모티콘 다운로드 중 네트워크 오류가 발생했어요. 잠시 후 다시 시도해주세요.');
@@ -253,7 +260,7 @@ bot.onText(/^.*$/, async (event) => {
                 passcode: PasscodeRes.passcode,
                 repeat: setInterval(async () => {
                     registerRes = await registerDevice(userId, authorization);
-                    if (registerDevice.status === -100) {
+                    if (registerRes.status === -100) {
                         return;
                     }
                     if (registerRes.status === 0) {
@@ -584,7 +591,7 @@ function createStickerFileOptions(index, extension) {
     };
 }
 
-async function downloadBufferWithRetry(url, isDecrypted, retries = CDN_DOWNLOAD_RETRIES) {
+async function downloadBufferWithRetry(url, needsDecrypt, retries = CDN_DOWNLOAD_RETRIES) {
     let lastError;
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -594,10 +601,7 @@ async function downloadBufferWithRetry(url, isDecrypted, retries = CDN_DOWNLOAD_
                 timeout: CDN_DOWNLOAD_TIMEOUT
             });
 
-            let emotBuffer = Buffer.from(fileResponse.data);
-            if (isDecrypted) emotBuffer = decryptEmoticon(emotBuffer);
-
-            return emotBuffer;
+            return fixEmotBuffer(Buffer.from(fileResponse.data), needsDecrypt);
         } catch (err) {
             lastError = err;
 
@@ -612,13 +616,13 @@ async function downloadBufferWithRetry(url, isDecrypted, retries = CDN_DOWNLOAD_
     throw lastError;
 }
 
-async function downloadStickerBuffers(playUrls, isDecrypted) {
+async function downloadStickerBuffers(playUrls, needsDecrypt) {
     const buffers = new Array(playUrls.length);
 
     for (let start = 0; start < playUrls.length; start += CDN_DOWNLOAD_CONCURRENCY) {
         const chunk = playUrls.slice(start, start + CDN_DOWNLOAD_CONCURRENCY);
         const chunkBuffers = await Promise.all(
-            chunk.map((url) => downloadBufferWithRetry(url, isDecrypted))
+            chunk.map((url) => downloadBufferWithRetry(url, needsDecrypt))
         );
 
         chunkBuffers.forEach((buffer, index) => {
@@ -627,6 +631,53 @@ async function downloadStickerBuffers(playUrls, isDecrypted) {
     }
 
     return buffers;
+}
+
+async function getStickerBuffers(meta, preview, urls, needsDecrypt) {
+    await fs.promises.mkdir(EMOTIONS_DIR, { recursive: true });
+
+    const dir = path.join(EMOTIONS_DIR, safeName(meta.itemCode));
+
+    if (fs.existsSync(dir)) {
+        const files = (await fs.promises.readdir(dir))
+            .filter((file) => /\.(png|webp|jpg|jpeg)$/i.test(file))
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+        return Promise.all(files.map(async (file) => {
+            const buffer = await fs.promises.readFile(path.join(dir, file));
+            return fixEmotBuffer(buffer, needsDecrypt);
+        }));
+    }
+
+    const ext = path.extname(preview.playPathFormat) || '.png';
+    const buffers = await downloadStickerBuffers(urls, needsDecrypt);
+
+    await fs.promises.mkdir(dir, { recursive: true });
+    await Promise.all(buffers.map((buffer, index) => {
+        const id = String(index + 1).padStart(3, '0');
+        return fs.promises.writeFile(path.join(dir, `${id}${ext}`), buffer);
+    }));
+
+    return buffers;
+}
+
+function safeName(value) {
+    return String(value).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+function fixEmotBuffer(buffer, needsDecrypt) {
+    if (!needsDecrypt || isImage(buffer)) {
+        return buffer;
+    }
+
+    const decrypted = decryptEmoticon(buffer);
+    return isImage(decrypted) ? decrypted : buffer;
+}
+
+function isImage(buffer) {
+    return buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        || buffer.subarray(0, 4).toString() === 'RIFF'
+        || buffer.subarray(0, 3).equals(Buffer.from([0xFF, 0xD8, 0xFF]));
 }
 
 function sleep(ms) {
